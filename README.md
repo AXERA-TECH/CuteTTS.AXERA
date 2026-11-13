@@ -1,6 +1,6 @@
 # CuteTTS.AXERA
 
-**AX650 上的 0.2B 连续隐变量自回归 TTS：zero-shot 音色克隆 · 24 kHz · 9 个 axmodel 全 NPU 推理**
+**AX650 上的 0.2B 连续隐变量自回归 TTS：zero-shot 音色克隆 · 24 kHz · 10 个 axmodel 全 NPU 推理**
 
 > **真流式（音频级，非切句）**：AR 循环不停，VAE 用带卷积状态的解码器逐 patch 输出，
 > **每 160 ms 一包、首包 TTFT 0.6~0.8 s**（缓存参考音色后 0.18 s）；同时保留非流式整句模式。
