@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+origin/
+export/onnx/
+calib/
+compile/work/
+compile/*.axmodel
+scratch/
+*.wav
+!samples/**/*.wav
