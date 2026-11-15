@@ -153,7 +153,7 @@ class CuteTTSAX:
         self.m_dec = mk(path("lm_decode"))
         self.m_vae_dec = {}
         self._dec_paths = {}
-        for lb in (64, 128, 256):
+        for lb in (80, 128, 256):
             try:
                 self._dec_paths[lb] = path(f"vae_dec_l{lb}")
             except FileNotFoundError:
@@ -282,6 +282,23 @@ class CuteTTSAX:
             self.m_vae_stream = self._find_engine(self._stream_path)
         return self.m_vae_stream
 
+    def warmup(self):
+        """Run one tiny synthesis so the first real request does not pay NPU init cost."""
+        try:
+            import tempfile, wave as _wave  # noqa: F401
+            ref = os.path.join(self.assets, "warmup.wav")
+            if not os.path.exists(ref):
+                import wave
+                pcm = np.zeros(24000, np.int16)
+                with wave.open(ref, "wb") as wf:
+                    wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(self.sr)
+                    wf.writeframes(pcm.tobytes())
+            for _ in self.synthesize_stream("warm up", ref, max_new=2, seed=1):
+                pass
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def _prepare_reference(self, reference_audio, ref_max_seconds=5.0):
         """Reference latents + speaker embedding, cached per (path, size, seconds)."""
         try:
@@ -295,6 +312,23 @@ class CuteTTSAX:
         if key is not None and key in cache:
             self.ref_cache_hit = True
             return cache[key]
+        # disk cache (shared across processes, like the C++ runtime)
+        disk_path = None
+        if key is not None:
+            import hashlib
+            h = hashlib.md5("|".join(str(k) for k in key).encode()).hexdigest()[:16]
+            disk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                     "..", "cache", "ref", h + ".npz")
+            disk_path = os.path.normpath(disk_path)
+            if os.path.exists(disk_path):
+                try:
+                    z = np.load(disk_path)
+                    cached = (z["lat"].astype(np.float32), z["spk"].astype(np.float32))
+                    cache[key] = cached
+                    self.ref_cache_hit = True
+                    return cached
+                except Exception:  # noqa: BLE001
+                    pass
         self.ref_cache_hit = False
         wav, sr = A.read_wav(reference_audio)
         wav24 = A.resample_to(wav, sr, self.sr)
@@ -309,22 +343,36 @@ class CuteTTSAX:
         spk = self._speaker_embedding(wav16)
         if key is not None:
             cache[key] = (lat, spk)
+            if disk_path is not None:
+                try:
+                    os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+                    np.savez(disk_path, lat=lat, spk=spk)
+                except Exception:  # noqa: BLE001
+                    pass
         return lat, spk
 
     # ------------------------------------------------------------------ streaming
-    def _decode_window(self, vae_lat, start, end):
-        """Exact VAE decode of latents [start, end) using a 128-latent sliding window.
+    def _decode_window(self, vae_lat, start, end, length=128):
+        """Exact VAE decode of latents [start, end) with a causal sliding window.
 
-        The DAC decoder is causal with a 64-latent receptive field (verified: zeroing
-        the first 64 latents leaves all later samples bit-identical), so a window of
-        ``[end-128, end)`` reproduces the offline decode exactly.
+        The DAC decoder is causal with a ~60-latent receptive field (measured: zeroing
+        the first 60 latents leaves all later samples bit-identical), so any window
+        with >=64 latents of context reproduces the offline decode exactly.
         """
-        w0 = max(0, end - 128)
-        win = np.zeros((1, 64, 128), np.float32)
+        w0 = max(0, end - length)
+        win = np.zeros((1, 64, length), np.float32)
         n = end - w0
         win[0, :, :n] = np.stack(vae_lat[w0:end], axis=1)
-        out = self._get_dec(128).run({"latent": win})[0][0, 0]
+        out = self._get_dec(length).run({"latent": win})[0][0, 0]
         return out[(start - w0) * 1920:(end - w0) * 1920]
+
+    def _stream_window(self, chunk=16):
+        """Smallest exact window that fits 64 context + ``chunk`` new latents."""
+        if chunk <= 16 and 80 in self._dec_paths:
+            return 80
+        if chunk <= 64 and 128 in self._dec_paths:
+            return 128
+        return max(self._dec_paths)
 
     # --------------------------------------------------------------------- api
     def synthesize(self, text, reference_audio, max_new=None, cfg_strength=None, seed=42,
@@ -426,7 +474,7 @@ class CuteTTSAX:
         return wav_out.astype(np.float32)
 
     def synthesize_stream(self, text, reference_audio, max_new=None, cfg_strength=None, seed=42,
-                          ref_max_seconds=5.0, rng=None, first_chunk=16, chunk=32, windowed=False):
+                          ref_max_seconds=5.0, rng=None, first_chunk=4, chunk=16, exact=True):
         """True streaming synthesis: yields float32 PCM chunks while the AR loop runs.
 
         Nothing is sentence-split: the AR loop keeps generating latents and audio is
@@ -459,10 +507,11 @@ class CuteTTSAX:
         cfg_t = np.array([cfg_strength], np.float32)
         vae_lat = []           # VAE-space latents, 64 floats each
         emitted = 0
-        if not windowed and self._get_stream_dec() is not None:
-            states = [np.zeros(sh, np.float32) for sh in self.vae_state_shapes]
-        else:
+        win_len = self._stream_window(chunk)
+        if exact or self._get_stream_dec() is None:
             states = None
+        else:
+            states = [np.zeros(sh, np.float32) for sh in self.vae_state_shapes]
         pos = plen
         n_steps = 0
         ttft = None
@@ -487,7 +536,7 @@ class CuteTTSAX:
 
         def emit(upto):
             nonlocal emitted, ttft, n_chunks
-            audio = self._decode_window(vae_lat, emitted, upto)
+            audio = self._decode_window(vae_lat, emitted, upto, win_len)
             emitted = upto
             n_chunks += 1
             if ttft is None:
@@ -551,5 +600,5 @@ class CuteTTSAX:
             "ttft": ttft or (time.time() - t0), "total": time.time() - t0,
             "audio_seconds": len(vae_lat) / 12.5, "steps": n_steps,
             "chunks": n_chunks, "dit": t_dit, "lm_decode": t_dec,
-            "streaming": True,
+            "streaming": True, "streaming_mode": ("stateful" if states is not None else f"window{win_len}"),
         }

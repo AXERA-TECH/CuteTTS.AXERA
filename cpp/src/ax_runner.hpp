@@ -133,6 +133,13 @@ public:
         return set(name, v.data(), v.size());
     }
 
+    // warm up the NPU: one dummy inference with zero inputs (excluded from TTFT)
+    bool warmup() {
+        for (AX_U32 i = 0; i < info_->nInputSize; ++i)
+            std::memset(io_->pInputs[i].pVirAddr, 0, io_->pInputs[i].nSize);
+        return run();
+    }
+
     bool run() {
         if (AX_ENGINE_RunSyncV2(handle_, context_, io_) != 0) return false;
         for (AX_U32 i = 0; i < info_->nOutputSize; ++i) {

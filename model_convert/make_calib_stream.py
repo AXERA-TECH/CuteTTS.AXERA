@@ -22,7 +22,12 @@ def main():
     sd = S.StreamDecoder(vae.decoder, S.collect_convs(vae.decoder))
     shapes = sd.state_shapes
 
-    srcs = [np.load(f"{ROOT}/export/eval_io/vae_dec_latent256.npy")]
+    srcs = []
+    # real *generated* latents (same distribution as inference)
+    import glob
+    for f in sorted(glob.glob(f"{ROOT}/scratch/stream_calib/*.npy")):
+        srcs.append(np.load(f))
+    srcs.append(np.load(f"{ROOT}/export/eval_io/vae_dec_latent256.npy"))
     d = f"{ROOT}/calib/data/vae_dec_l256/latent"
     srcs += [np.load(os.path.join(d, f)) for f in sorted(os.listdir(d))[:3]]
 
@@ -32,13 +37,15 @@ def main():
     k = 0
     for l in srcs:
         lat = torch.from_numpy(np.asarray(l, np.float32))
+        if lat.dim() == 2:
+            lat = lat[None]
         states = [torch.zeros(s) for s in shapes]
         with torch.no_grad():
             for i in range(0, min(lat.shape[-1], 128), S.PATCH):
                 piece = lat[:, :, i:i + S.PATCH]
                 if piece.shape[-1] < S.PATCH:
                     break
-                if i % 16 == 0 and k < 32:
+                if i % 8 == 0 and k < 60:
                     tag = f"c{k:02d}"
                     k += 1
                     np.save(f"{OUT}/latent/latent_{tag}.npy", piece.numpy())

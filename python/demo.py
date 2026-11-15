@@ -28,13 +28,14 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--ref-seconds", type=float, default=5.0)
     ap.add_argument("--stream", action="store_true", help="true streaming: emit audio while generating")
-    ap.add_argument("--first-chunk", type=int, default=16, help="latents in the first streamed chunk")
-    ap.add_argument("--chunk", type=int, default=32, help="latents per streamed chunk afterwards")
-    ap.add_argument("--windowed", action="store_true",
-                    help="exact windowed streaming (bit-identical to offline, higher latency)")
+    ap.add_argument("--first-chunk", type=int, default=8, help="latents in the first streamed chunk")
+    ap.add_argument("--chunk", type=int, default=16, help="latents per streamed chunk afterwards")
+    ap.add_argument("--stateful", action="store_true",
+                    help="per-patch stateful decoder (lowest latency, slightly lower quality)")
     a = ap.parse_args()
 
     tts = CuteTTSAX(a.model_dir, a.assets, engine=a.engine)
+    tts.warmup()
     if a.stream:
         import wave
         with wave.open(a.output, "wb") as wf:
@@ -45,7 +46,7 @@ def main():
                                                cfg_strength=a.cfg, seed=a.seed,
                                                ref_max_seconds=a.ref_seconds,
                                                first_chunk=a.first_chunk, chunk=a.chunk,
-                                               windowed=a.windowed):
+                                               exact=not a.stateful):
                 pcm = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype("<i2")
                 wf.writeframes(pcm.tobytes())
         tm = tts.last_timing

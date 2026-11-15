@@ -9,6 +9,9 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -98,7 +101,7 @@ static void run_rope(int pos, std::vector<float>& cos_t, std::vector<float>& sin
 }
 
 struct Models {
-    cutetts::AxModel vae_enc, spk_body, loc, prefill, dec, dit, dec64, dec128, dec256;
+    cutetts::AxModel vae_enc, spk_body, loc, prefill, dec, dit, dec128, dec256;
 };
 
 }  // namespace
@@ -114,9 +117,10 @@ int main(int argc, char** argv) {
     int seed = 42;
     bool debug_ids = false;
     bool stream = false;
-    bool windowed = false;
-    int first_chunk = 16;
-    int chunk = 32;
+    bool stateful_mode = false;
+    std::string ref_cache_dir = "cache/ref";
+    int first_chunk = 4;
+    int chunk = 16;
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         auto next = [&]() { return std::string(i + 1 < argc ? argv[++i] : ""); };
@@ -130,7 +134,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--seed")) seed = std::atoi(next().c_str());
         else if (!std::strcmp(a, "--debug-ids")) debug_ids = true;
         else if (!std::strcmp(a, "--stream")) stream = true;
-        else if (!std::strcmp(a, "--windowed")) windowed = true;
+        else if (!std::strcmp(a, "--stateful")) stateful_mode = true;
+        else if (!std::strcmp(a, "--ref-cache")) ref_cache_dir = next();
         else if (!std::strcmp(a, "--first-chunk")) first_chunk = std::atoi(next().c_str());
         else if (!std::strcmp(a, "--chunk")) chunk = std::atoi(next().c_str());
         else {
@@ -152,7 +157,7 @@ int main(int argc, char** argv) {
     if (!M.vae_enc.load(mpath("vae_enc")) || !M.spk_body.load(mpath("spk_body")) ||
         !M.loc.load(mpath("locenc_step")) || !M.prefill.load(mpath("lm_prefill")) ||
         !M.dec.load(mpath("lm_decode")) || !M.dit.load(mpath("dit_step")) ||
-        !M.dec64.load(mpath("vae_dec_l64")) || !M.dec128.load(mpath("vae_dec_l128")) ||
+        !M.dec128.load(mpath("vae_dec_l128")) ||
         !M.dec256.load(mpath("vae_dec_l256"))) {
         std::fprintf(stderr, "failed to load axmodels from %s\n", model_dir.c_str());
         return 3;
@@ -160,8 +165,11 @@ int main(int argc, char** argv) {
 
     // optional stateful streaming decoder
     cutetts::AxModel dec_stream;
-    bool has_stream_dec = dec_stream.load(mpath("vae_dec_stream"));
-    if (windowed) has_stream_dec = false;
+    bool has_stream_dec = stateful_mode && dec_stream.load(mpath("vae_dec_stream"));
+    // exact sliding-window decoder (prefer the dedicated 80-latent graph)
+    cutetts::AxModel dec_win;
+    int win_len = 128;
+    if (dec_win.load(mpath("vae_dec_l80"))) win_len = 80;
     std::vector<std::vector<int>> state_shapes;
     if (has_stream_dec) {
         FILE* jf = std::fopen((assets_dir + "/vae_stream.json").c_str(), "rb");
@@ -186,6 +194,15 @@ int main(int argc, char** argv) {
         if (state_shapes.empty()) has_stream_dec = false;
     }
 
+    // warm up every graph so the first request does not pay NPU lazy-init cost
+    {
+        cutetts::AxModel* warm[] = {&M.vae_enc, &M.spk_body, &M.loc, &M.prefill, &M.dec, &M.dit,
+                                    &M.dec128, &M.dec256};
+        for (auto* m : warm) m->warmup();
+        if (win_len == 80) dec_win.warmup();
+        if (has_stream_dec) dec_stream.warmup();
+    }
+
     const auto t_start = std::chrono::steady_clock::now();
     int emitted_ = 0;
     auto now = []() { return std::chrono::steady_clock::now(); };
@@ -201,15 +218,47 @@ int main(int argc, char** argv) {
     if (wav24.size() > (size_t)VAE_ENC_N) wav24.resize(VAE_ENC_N);
     const int nreal = static_cast<int>(wav24.size() / HOP);
     wav24.resize(VAE_ENC_N, 0.f);
-    auto t0 = now();
+    // ---- reference feature cache (skips vae_enc + speaker on repeat voices) ----
+    int n_lat = 0;
+    std::vector<float> latent;
+    std::vector<float> spk(256, 0.f);
+    std::string cache_file;
+    bool ref_cached = false;
     {
+        struct stat stt;
+        if (stat(ref_path.c_str(), &stt) == 0) {
+            char key[256];
+            std::snprintf(key, sizeof(key), "%s_%lld_%lld.ref", ref_path.c_str(),
+                          (long long)stt.st_size, (long long)stt.st_mtime);
+            cache_file = ref_cache_dir + "/" + std::to_string(std::hash<std::string>{}(key)) + ".ref";
+        }
+    }
+    if (!cache_file.empty()) {
+        FILE* cf = std::fopen(cache_file.c_str(), "rb");
+        if (cf) {
+            int nl = 0;
+            if (std::fread(&nl, 4, 1, cf) == 1 && nl > 0 && nl <= 62) {
+                std::vector<float> lat((size_t)nl * LATENT);
+                if (std::fread(lat.data(), 4, lat.size(), cf) == lat.size() &&
+                    std::fread(spk.data(), 4, 256, cf) == 256) {
+                    latent.swap(lat);
+                    n_lat = nl;
+                    ref_cached = true;
+                }
+            }
+            std::fclose(cf);
+        }
+    }
+    auto t0 = now();
+    if (!ref_cached) {
         std::vector<float> in(VAE_ENC_N, 0.f);
         std::memcpy(in.data(), wav24.data(), VAE_ENC_N * sizeof(float));
         if (!M.vae_enc.set("wav", in) || !M.vae_enc.run()) return 5;
+        latent = M.vae_enc.get("latent", 62 * LATENT);
+        if (latent.empty()) return 5;
+        n_lat = std::max(1, std::min(nreal, 62));
+        latent.resize((size_t)n_lat * LATENT);
     }
-    std::vector<float> latent = M.vae_enc.get("latent", 62 * LATENT);
-    if (latent.empty()) return 5;
-    const int n_lat = std::max(1, std::min(nreal, 62));
     auto t1 = now();
 
     // speaker: 16 kHz log-mel -> ECAPA body -> host BN+linear+L2
@@ -222,16 +271,16 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < rep; ++i) tmp.insert(tmp.end(), w16.begin(), w16.end());
         w16.swap(tmp);
     }
-    std::vector<float> mel = cutetts::logmel(w16, A.mel_fb, A.mel_win);
+    std::vector<float> mel = ref_cached ? std::vector<float>()
+                                        : cutetts::logmel(w16, A.mel_fb, A.mel_win);
     const int frames = static_cast<int>(mel.size() / 80);
     std::vector<float> mel_pad((size_t)80 * SPK_N, 0.f);
-    const int use_f = std::min(frames, SPK_N);
-    for (int m = 0; m < 80; ++m)
-        std::memcpy(&mel_pad[(size_t)m * SPK_N], &mel[(size_t)m * frames], use_f * sizeof(float));
-    if (!M.spk_body.set("logmel", mel_pad) || !M.spk_body.run()) return 6;
-    std::vector<float> stats = M.spk_body.get("stats", SPK_STATS);
-    std::vector<float> spk(256, 0.f);
-    {
+    if (!ref_cached) {
+        const int use_f = std::min(frames, SPK_N);
+        for (int m = 0; m < 80; ++m)
+            std::memcpy(&mel_pad[(size_t)m * SPK_N], &mel[(size_t)m * frames], use_f * sizeof(float));
+        if (!M.spk_body.set("logmel", mel_pad) || !M.spk_body.run()) return 6;
+        std::vector<float> stats = M.spk_body.get("stats", SPK_STATS);
         std::vector<float> y(SPK_STATS);
         for (int i = 0; i < SPK_STATS; ++i)
             y[i] = (stats[i] - A.bn_mean[i]) / std::sqrt(A.bn_var[i] + 1e-5f) * A.bn_w[i] + A.bn_b[i];
@@ -245,6 +294,18 @@ int main(int argc, char** argv) {
         }
         norm = std::sqrt(norm) + 1e-12;
         for (auto& v : spk) v = static_cast<float>(v / norm);
+        if (!cache_file.empty()) {
+            std::string dir = ref_cache_dir;
+            for (size_t i = 0; i < dir.size(); ++i)
+                if (dir[i] == '/') { std::string sub = dir.substr(0, i); mkdir(sub.c_str(), 0755); }
+            mkdir(dir.c_str(), 0755);
+            if (FILE* cf = std::fopen(cache_file.c_str(), "wb")) {
+                std::fwrite(&n_lat, 4, 1, cf);
+                std::fwrite(latent.data(), 4, (size_t)n_lat * LATENT, cf);
+                std::fwrite(spk.data(), 4, 256, cf);
+                std::fclose(cf);
+            }
+        }
     }
     auto t2 = now();
 
@@ -345,13 +406,15 @@ int main(int argc, char** argv) {
     std::vector<float> streamed;             // non-streaming fallback buffer
 
     auto decode_window = [&](int start, int end, std::vector<float>& out) {
-        const int w0 = std::max(0, end - 128);
-        std::vector<float> win((size_t)LATENT * 128, 0.f);
+        const int L = win_len;
+        const int w0 = std::max(0, end - L);
+        std::vector<float> win((size_t)LATENT * L, 0.f);
         for (int i = w0; i < end; ++i)
             for (int c = 0; c < LATENT; ++c)
-                win[(size_t)c * 128 + (i - w0)] = lat_all[(size_t)i * LATENT + c];
-        if (!M.dec128.set("latent", win) || !M.dec128.run()) return false;
-        std::vector<float> wav = M.dec128.get("wav", (size_t)128 * HOP);
+                win[(size_t)c * L + (i - w0)] = lat_all[(size_t)i * LATENT + c];
+        cutetts::AxModel& dm = (L == 80) ? dec_win : M.dec128;
+        if (!dm.set("latent", win) || !dm.run()) return false;
+        std::vector<float> wav = dm.get("wav", (size_t)L * HOP);
         if (wav.empty()) return false;
         out.assign(wav.begin() + (size_t)(start - w0) * HOP,
                    wav.begin() + (size_t)(end - w0) * HOP);
@@ -492,7 +555,7 @@ int main(int argc, char** argv) {
             if (!emit(total_lat)) return 14;
         if (!writer.close()) return 15;
     } else {
-        const int bucket = total_lat <= 64 ? 64 : (total_lat <= 128 ? 128 : 256);
+        const int bucket = total_lat <= win_len ? win_len : (total_lat <= 128 ? 128 : 256);
         if (total_lat > 256) {
             std::fprintf(stderr, "audio too long (%d latents > 256)\n", total_lat);
             return 13;
@@ -501,7 +564,8 @@ int main(int argc, char** argv) {
         for (int i = 0; i < total_lat; ++i)
             for (int c = 0; c < LATENT; ++c)
                 vae_lat[(size_t)c * bucket + i] = lat_all[(size_t)i * LATENT + c];
-        cutetts::AxModel& dec = bucket == 64 ? M.dec64 : (bucket == 128 ? M.dec128 : M.dec256);
+        cutetts::AxModel& dec = (bucket == win_len) ? dec_win
+                               : (bucket == 128 ? M.dec128 : M.dec256);
         if (!dec.set("latent", vae_lat) || !dec.run()) return 14;
         wav_out = dec.get("wav", (size_t)bucket * HOP);
         if (wav_out.empty()) return 14;
@@ -516,8 +580,9 @@ int main(int argc, char** argv) {
     std::printf("%s: audio %.2fs, TTFT %.2fs, total %.2fs, RTF %.3f, %d patches, %d chunks\n",
                 stream ? "streaming" : "offline", dur, (ttft < 0 ? total_ms : ttft) / 1000.0,
                 total_ms / 1000.0, total_ms / 1000.0 / dur, steps, chunks);
-    std::printf("  vae_enc %.0f ms  speaker %.0f ms  prompt %.0f ms  prefill %.0f ms  "
+    std::printf("  ref %s  vae_enc %.0f ms  speaker %.0f ms  prompt %.0f ms  prefill %.0f ms  "
                 "ar %.0f ms (dit %.0f, lm_dec %.0f)  vae_dec %.0f ms\n",
+                ref_cached ? "cached" : "encoded",
                 ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t4, t5), t_dit, t_dec,
                 ms(t5, t6));
     std::printf("saved %s\n", out_path.c_str());

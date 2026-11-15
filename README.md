@@ -1,10 +1,10 @@
 # CuteTTS.AXERA
 
-**AX650 上的 0.2B 连续隐变量自回归 TTS：zero-shot 音色克隆 · 24 kHz · 10 个 axmodel 全 NPU 推理**
+**AX650 上的 0.2B 连续隐变量自回归 TTS：zero-shot 音色克隆 · 24 kHz · 9 个 axmodel 全 NPU 推理**
 
-> **真流式（音频级，非切句）**：AR 循环不停，VAE 用带卷积状态的解码器逐 patch 输出，
-> **每 160 ms 一包、首包 TTFT 0.6~0.8 s**（缓存参考音色后 0.18 s）；同时保留非流式整句模式。
-> C++ 流式 RTF 0.39~0.54 / 非流式 0.31~0.51。
+> **真流式（音频级，非切句）**：AR 循环不停，VAE 用 80-latent 精确滑动窗（64 上下文 + 16 新 latent）
+> 解码，**每 1.28 s 输出一包、流式输出与离线逐样本一致**（SNR 151~154 dB）；
+> TTFT 1.1~1.2 s（缓存参考音色后 0.46 s）。同时保留非流式整句模式。
 
 ![RTF](https://img.shields.io/badge/RTF-0.39--0.54%20cpp-brightgreen) ![TTFT](https://img.shields.io/badge/TTFT-0.6%20s-blue) ![Size](https://img.shields.io/badge/axmodel-778%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue) ![Size](https://img.shields.io/badge/axmodel-686%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
@@ -75,31 +75,31 @@ print(tts.last_timing)
 
 ## 推理速度
 
-**流式 vs 非流式（同一组 axmodel）：**
-
 | 模式 | 实现 | 音频 | TTFT | 总耗时 | RTF | 出包间隔 |
 |---|---|---|---|---|---|---|
-| **流式** | C++ | 3.04 s | **0.69 s** | 1.64 s | 0.541 | **160 ms** |
-| **流式** | Python | 2.88 s | **0.79 s** | 1.90 s | 0.660 | **160 ms** |
-| 非流式 | C++ | 3.04 s | 1.54 s | 1.54 s | **0.508** | — |
-| 非流式 | Python | 2.88 s | 1.61 s | 1.61 s | 0.560 | — |
+| **流式（精确）** | C++ | 3.04 s | **0.48~0.54 s**（首次 1.08 s） | 1.86~1.91 s | 0.61~0.63 | 1.28 s |
+| **流式（精确）** | Python | 2.88 s | **0.58~0.61 s**（首次 1.13 s） | 1.68~1.70 s | 0.58~0.59 | 1.28 s |
+| 非流式 | C++ | 3.04 s | 1.48 s | 1.48 s | **0.49** | — |
+| 非流式 | Python | 2.88 s | 1.61 s | 1.61 s | 0.56 | — |
 
-10.2 s 长句：流式 C++ `TTFT 0.59 s / 总 3.95 s / RTF 0.386`，Python `TTFT 0.80 s / 总 5.06 s / RTF 0.479`。
-参考音色缓存后（同一参考音频反复合成），Python TTFT 可低至 **0.18 s**。
+- 10.2 s 长句：流式 C++ `TTFT 0.56 s / RTF 0.49`；短句 RTF 偏高是参考编码（0.41 s）等固定开销摊薄不了
+- **参考音色缓存**（C++ 写 `cache/ref/*.ref`，Python 写 `cache/ref/*.npz`，跨进程复用）：
+  同一参考音频再次合成时跳过 `vae_enc`（0.30 s）与音色编码（0.11 s），TTFT 从 ~1.1 s 降到 ~0.5 s
+- 流式输出与离线**逐样本一致**（cos 1.000000）
 
 **指标定义**
 
 - **RTF（Real-Time Factor）= 总耗时 / 音频时长**，越小越好；`RTF < 1` 表示合成快于实时。
-- **TTFT（Time To First Token，首包时延）= 发起请求到拿到第一段音频的时间**。
-  流式下 = 参考特征提取 + 1 个 AR patch + 流式解码；非流式下 = 整句端到端耗时。
+- **TTFT（Time To First Token，首包时延）= 发起请求到拿到第一段音频的时间**：
+  流式下 = 参考特征提取（缓存命中则跳过）+ 首包 4 个 latent 的 AR + 一次窗口解码；
+  非流式下 = 整句端到端耗时。启动时的模型预热不计入 TTFT。
 
 **流式实现（真流式，不是切句）**
 
-- AR 循环只跑一次、latent 连续产生；`vae_dec_stream.axmodel` 把解码器 31 个因果卷积的
-  左侧上下文做成 18 个显式状态张量（共 0.46 MB），每来 2 个 latent（160 ms）解码一次并输出。
-- 与离线解码对比：本机 fp32 下逐样本一致（cos 1.0000000）；板端量化后 SNR 11.3 dB、
-  ASR 逐词一致、底噪指标与离线持平。
-- `--windowed` 可切到「128-latent 滑动窗」精确模式（与离线逐样本一致，TTFT 1.3 s）。
+- AR 循环只跑一次、latent 连续产生；每攒够 16 个 latent（1.28 s）用 `vae_dec_l80`
+  解码一次：窗口 `[t-80, t)`（前 64 个 latent 作因果上下文，只输出新增 16 个）。
+- 解码器实测感受野 60 latent，窗口上下文 ≥64 即与整句离线解码**逐样本一致**。
+- 首包只等 4 个 latent（0.32 s）以加快首响；`--first-chunk/--chunk` 可调。
 
 ## 目录结构
 

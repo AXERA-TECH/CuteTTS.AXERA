@@ -40,8 +40,13 @@ bash cpp/build_ax650.sh
 该图把解码器 31 个因果卷积的左侧上下文变成 18 个显式状态张量（0.46 MB），
 每步输入 `latent[1,64,2]` + 状态，输出 `wav[1,1,3840]` + 新状态，主机侧零拷贝。
 
-`--windowed` 可切到精确模式：用 `vae_dec_l128` 的 128 长度滑动窗解码
-（解码器感受野 64 latent，实测与离线**逐样本一致**），首包 1.28 s、之后 2.56 s 一包。
+默认是**精确滑动窗**：每 16 个 latent（1.28 s）用 `vae_dec_l80` 的 80 长度窗口解码
+（前 64 个 latent 作因果上下文），解码器感受野 60 latent，因此与离线**逐样本一致**。
+首包只等 4 个 latent，TTFT ≈0.54 s（参考特征缓存命中）/ 1.23 s（首次）。
+
+参考特征缓存：同一参考音频第二次起走 `cache/ref/`（可用 `--ref-cache <dir>` 指定），
+跳过 `vae_enc` + 音色编码，TTFT 降低约 0.7 s。`--stateful` 保留旧的逐 patch 状态解码
+（160 ms 一包，速度最快但会有轻微底噪，需额外编译 `vae_dec_stream`）。
 
 参数：`--cfg`（默认 2.0）、`--seed`（42）、`--max-new`（最多 patch 数，1 patch ≈ 160 ms）、
 `--debug-ids`（只打印 tokenizer 结果，用于和 Python 对拍）。

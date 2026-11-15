@@ -8,3 +8,4 @@ compile/*.axmodel
 scratch/
 *.wav
 !samples/**/*.wav
+cache/
