@@ -478,8 +478,9 @@ class CuteTTSAX:
         """True streaming synthesis: yields float32 PCM chunks while the AR loop runs.
 
         Nothing is sentence-split: the AR loop keeps generating latents and audio is
-        decoded/emitted every ``chunk`` latents (2.56 s) after an initial
-        ``first_chunk`` latents (1.28 s), using an exact 128-latent sliding window.
+        decoded/emitted every ``chunk`` latents (1.28 s) after an initial
+        ``first_chunk`` latents (0.32 s), using an exact 80-latent sliding window
+        (64 latents of causal context + the new ones).
         """
         t0 = time.time()
         cfg_strength = self.cfg["cfg_strength"] if cfg_strength is None else float(cfg_strength)
