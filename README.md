@@ -2,7 +2,7 @@
 
 **CuteTTS（0.2B 连续隐变量自回归 TTS）在 AX650 上的全 NPU 部署：zero-shot 音色克隆，24 kHz 输出。**
 
-支持流式合成（1.28 s 一包，首包约 0.5 s）与非流式整句合成；C++ RTF 0.49~0.63，Python RTF 0.56~0.59。
+支持流式合成（1.28 s 一包，首包约 0.5 s）与非流式整句合成；C++ RTF 0.49–0.63，Python RTF 0.56–0.59。
 
 ![RTF](https://img.shields.io/badge/RTF-0.49--0.63%20cpp-brightgreen) ![TTFT](https://img.shields.io/badge/TTFT-0.5%20s-blue) ![Size](https://img.shields.io/badge/axmodel-688%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
@@ -77,8 +77,8 @@ print(tts.last_timing)
 
 | 模式 | 实现 | 音频 | TTFT（首包） | 总耗时 | RTF（耗时/音频） | 出包间隔 |
 |---|---|---|---|---|---|---|
-| 流式 | C++ | 3.04 s | 0.48~0.54 s | 1.86~1.91 s | 0.61~0.63 | 1.28 s |
-| 流式 | Python | 2.88 s | 0.58~0.61 s | 1.68~1.70 s | 0.58~0.59 | 1.28 s |
+| 流式 | C++ | 3.04 s | 0.48–0.54 s | 1.86–1.91 s | 0.61–0.63 | 1.28 s |
+| 流式 | Python | 2.88 s | 0.58–0.61 s | 1.68–1.70 s | 0.58–0.59 | 1.28 s |
 | 非流式 | C++ | 3.04 s | 1.48 s | 1.48 s | 0.49 | — |
 | 非流式 | Python | 2.88 s | 1.61 s | 1.61 s | 0.56 | — |
 
