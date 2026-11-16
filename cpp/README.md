@@ -51,6 +51,7 @@ bash cpp/build_ax650.sh
 （160 ms 一包，速度最快但会有轻微底噪，需额外编译 `vae_dec_stream`）。
 
 参数：`--cfg`（默认 2.0）、`--seed`（42）、`--max-new`（最多 patch 数，1 patch ≈ 160 ms）、
+`--split`（长文本按句切分，逐段生成后拼接）、`--split-sec`（每段目标时长，默认 18 s）、
 `--debug-ids`（只打印 tokenizer 结果，用于和 Python 对拍）。
 
 ## 与 Python SDK 的一致性

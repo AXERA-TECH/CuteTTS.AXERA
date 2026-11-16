@@ -17,6 +17,7 @@
 
 #include "audio.hpp"
 #include "ax_runner.hpp"
+#include "text_split.hpp"
 #include "tokenizer.hpp"
 
 namespace {
@@ -121,6 +122,8 @@ int main(int argc, char** argv) {
     std::string ref_cache_dir = "cache/ref";
     int first_chunk = 4;
     int chunk = 16;
+    bool split = false;                 // --split: 长文本按句切分，逐句生成
+    double split_sec = 18.0;            // --split-sec: 每段目标时长上限（秒）
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         auto next = [&]() { return std::string(i + 1 < argc ? argv[++i] : ""); };
@@ -138,6 +141,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--ref-cache")) ref_cache_dir = next();
         else if (!std::strcmp(a, "--first-chunk")) first_chunk = std::atoi(next().c_str());
         else if (!std::strcmp(a, "--chunk")) chunk = std::atoi(next().c_str());
+        else if (!std::strcmp(a, "--split")) split = true;
+        else if (!std::strcmp(a, "--split-sec")) split_sec = std::atof(next().c_str());
         else {
             std::fprintf(stderr, "unknown arg %s\n", a);
             return 1;
@@ -327,11 +332,33 @@ int main(int argc, char** argv) {
                      ms(tp0, tp1), ms(tp1, tp2), ms(tp2, tp3), ms(tp3, tp4));
     auto t2 = now();
 
+    // ---- 长文本按句切分：每段一次完整请求，音频顺序拼接 ----
+    std::vector<std::string> segments =
+        split ? cutetts::split_text(text, split_sec) : std::vector<std::string>{text};
+    if (segments.empty()) segments.push_back(text);
+    if (segments.size() > 1) {
+        std::fprintf(stderr, "[split] %zu segments:", segments.size());
+        for (const auto& sg : segments)
+            std::fprintf(stderr, " %.1fs", cutetts::estimate_seconds(sg));
+        std::fprintf(stderr, "\n");
+    }
+    cutetts::WavWriter writer;
+    std::vector<float> offline_pcm;          // 非流式：所有分段拼接后的 PCM
+    double t_dit_sum = 0.0, t_dec_sum = 0.0;
+    double ttft = -1.0, t_first_lat = -1.0;
+    auto t3 = now(), t4 = now(), t5 = now();
+    int steps_sum = 0, chunks_sum = 0, total_lat_sum = 0;
+    if (stream) {
+        if (!writer.open(out_path, SR)) return 15;
+    }
+    for (size_t seg_i = 0; seg_i < segments.size(); ++seg_i) {
+    const std::string& seg_text = segments[seg_i];
+
     // ------------------------------------------------------------------- prompt
     std::vector<int> ids_pre = tok.encode(kPrefix);
     std::vector<int> ids_mid = tok.encode(kMid);
     char sfx[2048];
-    std::snprintf(sfx, sizeof(sfx), kSuffixFmt, text.c_str());
+    std::snprintf(sfx, sizeof(sfx), kSuffixFmt, seg_text.c_str());
     std::vector<int> ids_suf = tok.encode(sfx);
 
     if (debug_ids) {
@@ -387,7 +414,7 @@ int main(int argc, char** argv) {
         std::memcpy(&embeds[(size_t)(speech_pos + p) * HID], e.data(), HID * sizeof(float));
     }
     put_row(speech_pos + n_patch, ids_suf.data(), (int)ids_suf.size());
-    auto t3 = now();
+    t3 = now();
 
     // ------------------------------------------------------------------ prefill
     if (!M.prefill.set("embeds", embeds) || !M.prefill.run()) return 9;
@@ -408,7 +435,7 @@ int main(int argc, char** argv) {
     }
     std::vector<float> hidden(HID, 0.f);
     std::memcpy(hidden.data(), &hidden_all[(size_t)(n - 1) * HID], HID * sizeof(float));
-    auto t4 = now();
+    t4 = now();
 
     // -------------------------------------------------------------- AR loop
     std::vector<float> mask((size_t)(KV + 1), -30.f);
@@ -418,10 +445,10 @@ int main(int argc, char** argv) {
     std::mt19937 gen(static_cast<uint32_t>(seed));
     std::normal_distribution<float> nd(0.f, 1.f);
     std::vector<float> lat_all;              // VAE-space latents, LATENT floats each
-    double t_dit = 0, t_dec = 0, ttft = -1.0, t_first_lat = -1.0;
+    double t_dit = 0, t_dec = 0;
     int pos = n, steps = 0, chunks = 0;
-    cutetts::WavWriter writer;
-    std::vector<float> streamed;             // non-streaming fallback buffer
+    emitted_ = 0;
+    std::vector<float> streamed;             // 本段非流式 PCM
 
     auto decode_window = [&](int start, int end, std::vector<float>& out) {
         const int L = win_len;
@@ -484,10 +511,6 @@ int main(int argc, char** argv) {
         }
         return true;
     };
-    if (stream) {
-        if (!writer.open(out_path, SR)) return 15;
-    }
-
     for (int step = 0; step < max_new; ++step) {
         const bool stop_now = stop.size() >= 2 && (stop[0] < stop[1]);
         std::vector<float> x((size_t)PATCH * LATENT);
@@ -566,19 +589,17 @@ int main(int argc, char** argv) {
         }
         if (pos >= KV - 1) break;
     }
-    auto t5 = now();
+    t5 = now();
     const int total_lat = (int)(lat_all.size() / LATENT);
-    std::vector<float> wav_out;
     if (stream) {
         if (!has_stream_dec && emitted_ < total_lat)
             if (!emit(total_lat)) return 14;
-        if (!writer.close()) return 15;
-    } else {
-        const int bucket = total_lat <= win_len ? win_len : (total_lat <= 128 ? 128 : 256);
+    } else if (total_lat > 0) {
         if (total_lat > 256) {
             std::fprintf(stderr, "audio too long (%d latents > 256)\n", total_lat);
             return 13;
         }
+        const int bucket = total_lat <= win_len ? win_len : (total_lat <= 128 ? 128 : 256);
         std::vector<float> vae_lat((size_t)LATENT * bucket, 0.f);
         for (int i = 0; i < total_lat; ++i)
             for (int c = 0; c < LATENT; ++c)
@@ -586,27 +607,41 @@ int main(int argc, char** argv) {
         cutetts::AxModel& dec = (bucket == win_len) ? dec_win
                                : (bucket == 128 ? M.dec128 : M.dec256);
         if (!dec.set("latent", vae_lat) || !dec.run()) return 14;
-        wav_out = dec.get("wav", (size_t)bucket * HOP);
-        if (wav_out.empty()) return 14;
-        wav_out.resize((size_t)total_lat * HOP);
-        if (!cutetts::write_wav(out_path, wav_out, SR)) return 15;
+        std::vector<float> wav_seg = dec.get("wav", (size_t)bucket * HOP);
+        if (wav_seg.empty()) return 14;
+        wav_seg.resize((size_t)total_lat * HOP);
+        streamed.insert(streamed.end(), wav_seg.begin(), wav_seg.end());
     }
+    offline_pcm.insert(offline_pcm.end(), streamed.begin(), streamed.end());
+    t_dit_sum += t_dit;
+    t_dec_sum += t_dec;
+    steps_sum += steps;
+    chunks_sum += chunks;
+    total_lat_sum += total_lat;
+    }  // end of per-sentence loop
+
     flush_ref_cache();
-    const size_t samples = (size_t)total_lat * HOP;
+    if (stream) {
+        if (!writer.close()) return 15;
+    } else if (!cutetts::write_wav(out_path, offline_pcm, SR)) {
+        return 15;
+    }
+    const size_t samples = (size_t)total_lat_sum * HOP;
     auto t6 = now();
 
     const double total_ms = ms(t_start, t6);
     const double dur = double(samples) / SR;
     std::printf("%s: audio %.2fs, TTFT %.2fs (first latent), TTFA %.2fs (first audio), "
-                "total %.2fs, RTF %.3f, %d patches, %d chunks\n",
+                "total %.2fs, RTF %.3f, %d patches, %d chunks, %zu segments\n",
                 stream ? "streaming" : "offline", dur,
                 (t_first_lat < 0 ? total_ms : t_first_lat) / 1000.0,
                 (ttft < 0 ? total_ms : ttft) / 1000.0,
-                total_ms / 1000.0, total_ms / 1000.0 / dur, steps, chunks);
+                total_ms / 1000.0, total_ms / 1000.0 / dur, steps_sum, chunks_sum,
+                segments.size());
     std::printf("  ref %s  vae_enc %.0f ms  speaker %.0f ms  prompt %.0f ms  prefill %.0f ms  "
                 "ar %.0f ms (dit %.0f, lm_dec %.0f)  vae_dec %.0f ms\n",
                 ref_cached ? "cached" : "encoded",
-                ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t4, t5), t_dit, t_dec,
+                ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t4, t5), t_dit_sum, t_dec_sum,
                 ms(t5, t6));
     if (std::getenv("CUTETTS_PROFILE") && t_cache_flush > 0)
         std::fprintf(stderr, "    [host] ref cache write (after first packet) %.0f ms\n", t_cache_flush);

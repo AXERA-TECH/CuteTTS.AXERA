@@ -30,6 +30,9 @@ def main():
     ap.add_argument("--stream", action="store_true", help="true streaming: emit audio while generating")
     ap.add_argument("--first-chunk", type=int, default=8, help="latents in the first streamed chunk")
     ap.add_argument("--chunk", type=int, default=16, help="latents per streamed chunk afterwards")
+    ap.add_argument("--split", action="store_true",
+                    help="长文本按句切分（每段 ≤ --split-sec 秒），逐段生成后拼接")
+    ap.add_argument("--split-sec", type=float, default=18.0)
     ap.add_argument("--stateful", action="store_true",
                     help="per-patch stateful decoder (lowest latency, slightly lower quality)")
     a = ap.parse_args()
@@ -57,8 +60,13 @@ def main():
               f"(RTF {tm['total']/max(tm['audio_seconds'],1e-6):.3f})")
         print("saved", a.output)
         return
-    wav = tts.synthesize(a.text, a.reference, max_new=a.max_new, cfg_strength=a.cfg,
-                         seed=a.seed, ref_max_seconds=a.ref_seconds)
+    if a.split:
+        wav = tts.synthesize_long(a.text, a.reference, max_seconds=a.split_sec,
+                                  max_new=a.max_new, cfg_strength=a.cfg, seed=a.seed,
+                                  ref_max_seconds=a.ref_seconds)
+    else:
+        wav = tts.synthesize(a.text, a.reference, max_new=a.max_new, cfg_strength=a.cfg,
+                             seed=a.seed, ref_max_seconds=a.ref_seconds)
     A.write_wav(a.output, wav, tts.sr)
     tm = tts.last_timing
     print(f"audio {tm['audio_seconds']:.2f}s in {tm['total']:.2f}s "

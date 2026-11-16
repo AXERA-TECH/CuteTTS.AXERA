@@ -40,6 +40,9 @@ bash run_ax650.sh "今天天气很好，我们一起去公园散步吧。" sampl
 
 # 调 CFG / 随机种子 / 最长 patch 数（1 patch ≈ 160 ms）
 bash run_ax650.sh "Hello from AX650!" samples/reference.wav en.wav --cfg 2.0 --seed 42 --max-new 128
+
+# 长文本：自动按句切分（每段 ≤18 s），逐段生成后拼接
+bash run_ax650.sh "长文本内容……" samples/reference.wav long.wav --split
 ```
 
 Python SDK：
@@ -55,7 +58,7 @@ A.write_wav("out.wav", wav, tts.sr)
 print(tts.last_timing)
 ```
 
-参考音频 ≤ 5 s；单次生成 ≤ 20.5 s；输出 24 kHz 单声道。
+参考音频 ≤ 5 s；单次生成 ≤ 20.5 s（**超过加 `--split` 自动按句切分**，可支持任意长度）；输出 24 kHz 单声道。
 
 <a id="results"></a>
 

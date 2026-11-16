@@ -375,6 +375,53 @@ class CuteTTSAX:
         return max(self._dec_paths)
 
     # --------------------------------------------------------------------- api
+    @staticmethod
+    def _merge_timing(agg, tm):
+        """多段合成时聚合计时：TTFT/TTFA 取第一段，其余累加。"""
+        if tm is None:
+            return agg
+        if agg is None:
+            return dict(tm)
+        for k in ("total", "audio_seconds", "steps", "chunks", "dit", "lm_decode"):
+            if k in tm:
+                agg[k] = agg.get(k, 0) + tm[k]
+        return agg
+
+    # ---------------------------------------------------------------- long text
+    def synthesize_long(self, text, reference_audio, max_seconds=18.0, **kw):
+        """长文本：按句切分后逐段合成，返回拼接好的 PCM。
+
+        单次请求上限约 20.3 s（KV 256 prompt + 127 patch），超出会被截断；
+        这里按 ``max_seconds``（默认 18 s）切段，逐段生成后拼起来。
+        """
+        from .text import split_text
+
+        parts = split_text(text, max_seconds)
+        self.segments = len(parts)
+        outs, agg = [], None
+        for p in parts:
+            outs.append(self.synthesize(p, reference_audio, **kw))
+            agg = self._merge_timing(agg, self.last_timing)
+        if agg is not None:
+            agg["segments"] = len(parts)
+            self.last_timing = agg
+        return np.concatenate(outs) if outs else np.zeros(0, np.float32)
+
+    def synthesize_stream_long(self, text, reference_audio, max_seconds=18.0, **kw):
+        """长文本流式：按句切段，一段接一段地流式输出（音色缓存后每段 ≈0.5 s 首包）。"""
+        from .text import split_text
+
+        parts = split_text(text, max_seconds)
+        self.segments = len(parts)
+        agg = None
+        for p in parts:
+            yield from self.synthesize_stream(p, reference_audio, **kw)
+            agg = self._merge_timing(agg, self.last_timing)
+        if agg is not None:
+            agg["segments"] = len(parts)
+            agg["streaming"] = True
+            self.last_timing = agg
+
     def synthesize(self, text, reference_audio, max_new=None, cfg_strength=None, seed=42,
                    ref_max_seconds=5.0, rng=None):
         t0 = time.time()
