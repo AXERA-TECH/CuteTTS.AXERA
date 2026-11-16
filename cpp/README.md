@@ -42,10 +42,12 @@ bash cpp/build_ax650.sh
 
 默认是**精确滑动窗**：每 16 个 latent（1.28 s）用 `vae_dec_l80` 的 80 长度窗口解码
 （前 64 个 latent 作因果上下文），解码器感受野 60 latent，因此与离线**逐样本一致**。
-首包只等 4 个 latent，TTFT ≈0.54 s（参考特征缓存命中）/ 1.23 s（首次）。
+首包只等 4 个 latent：TTFA（首个音频）≈0.48~0.54 s（参考特征缓存命中）/ 1.18 s（首次），
+其中 TTFT（首个 latent）≈0.17~0.22 s / 0.87 s。
 
 参考特征缓存：同一参考音频第二次起走 `cache/ref/`（可用 `--ref-cache <dir>` 指定），
-跳过 `vae_enc` + 音色编码，TTFT 降低约 0.7 s。`--stateful` 保留旧的逐 patch 状态解码
+跳过 `vae_enc` + 音色编码，TTFA 降低约 0.4 s（首次 0.89 s → 命中 0.47~0.52 s）。
+首次的参考特征落盘推迟到首包发出之后（NFS 写一次约 0.2 s，不占 TTFT/TTFA）。`--stateful` 保留旧的逐 patch 状态解码
 （160 ms 一包，速度最快但会有轻微底噪，需额外编译 `vae_dec_stream`）。
 
 参数：`--cfg`（默认 2.0）、`--seed`（42）、`--max-new`（最多 patch 数，1 patch ≈ 160 ms）、

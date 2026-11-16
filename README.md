@@ -2,9 +2,9 @@
 
 **CuteTTS（0.2B 连续隐变量自回归 TTS）在 AX650 上的全 NPU 部署：zero-shot 音色克隆，24 kHz 输出。**
 
-支持流式合成（1.28 s 一包，首包约 0.5 s）与非流式整句合成；C++ RTF 0.49–0.63，Python RTF 0.56–0.59。
+支持流式合成（1.28 s 一包）与非流式整句合成：首音频 **TTFA 0.48 s**、首 latent TTFT 0.17 s（参考音色缓存命中），C++ RTF 0.35–0.63，Python RTF 0.40–0.59。
 
-![RTF](https://img.shields.io/badge/RTF-0.49--0.63%20cpp-brightgreen) ![TTFT](https://img.shields.io/badge/TTFT-0.5%20s-blue) ![Size](https://img.shields.io/badge/axmodel-688%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
+![RTF](https://img.shields.io/badge/RTF-0.35--0.63%20cpp-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![Size](https://img.shields.io/badge/axmodel-688%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
 - HuggingFace（预编译模型 + SDK）: https://huggingface.co/HY-2012/CuteTTS.AXERA
 - GitHub（源码 + 转换脚本 + C++）: https://github.com/ZY-2012/CuteTTS.AXERA
@@ -75,12 +75,14 @@ print(tts.last_timing)
 
 ## 推理速度
 
-| 模式 | 实现 | 音频 | TTFT（首包） | 总耗时 | RTF（耗时/音频） | 出包间隔 |
-|---|---|---|---|---|---|---|
-| 流式 | C++ | 3.04 s | 0.48–0.54 s | 1.86–1.91 s | 0.61–0.63 | 1.28 s |
-| 流式 | Python | 2.88 s | 0.58–0.61 s | 1.68–1.70 s | 0.58–0.59 | 1.28 s |
-| 非流式 | C++ | 3.04 s | 1.48 s | 1.48 s | 0.49 | — |
-| 非流式 | Python | 2.88 s | 1.61 s | 1.61 s | 0.56 | — |
+| 模式 | 实现 | 音频 | TTFT（首 latent） | TTFA（首音频） | 总耗时 | RTF（耗时/音频） | 出包间隔 |
+|---|---|---|---|---|---|---|---|
+| 流式 | C++ | 3.04 s | 0.15–0.21 s（首次 0.57 s） | 0.47–0.52 s（首次 0.89 s） | 1.84–1.89 s | 0.61–0.62 | 1.28 s |
+| 流式 | Python | 2.88 s | 0.14–0.15 s（首次 0.86 s） | 0.47–0.49 s（首次 1.20 s） | 1.69–1.71 s | 0.59 | 1.28 s |
+| 非流式 | C++ | 3.04 s | 1.06–1.15 s | 1.06–1.15 s | 1.06–1.15 s | 0.35–0.38 | — |
+| 非流式 | Python | 2.88 s | 1.16–1.17 s | 1.16–1.17 s | 1.16–1.17 s | 0.40–0.41 | — |
+
+> **TTFT（Time To First Token）**= 发起请求到第一个 latent 产出；**TTFA（Time To First Audio）**= 发起请求到第一段可播放音频。非流式一次性返回，两者即总耗时；括号内为无参考缓存时的首次调用。
 
 <a id="tree"></a>
 

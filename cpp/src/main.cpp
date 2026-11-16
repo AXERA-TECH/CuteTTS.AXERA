@@ -262,9 +262,12 @@ int main(int argc, char** argv) {
     auto t1 = now();
 
     // speaker: 16 kHz log-mel -> ECAPA body -> host BN+linear+L2
-    std::vector<float> w16 = cutetts::resample_to(wav, sr, 16000);
-    if (w16.size() > 8 * 16000) w16.resize(8 * 16000);
-    if (w16.size() < 32000) {
+    auto tp0 = now();
+    std::vector<float> w16 = ref_cached ? std::vector<float>()
+                                    : cutetts::resample_to(wav, sr, 16000);
+    auto tp1 = now();
+    if (!ref_cached && w16.size() > 8 * 16000) w16.resize(8 * 16000);
+    if (!ref_cached && w16.size() < 32000) {
         const size_t rep = (32000 + w16.size() - 1) / w16.size();
         std::vector<float> tmp;
         tmp.reserve(w16.size() * rep);
@@ -273,6 +276,8 @@ int main(int argc, char** argv) {
     }
     std::vector<float> mel = ref_cached ? std::vector<float>()
                                         : cutetts::logmel(w16, A.mel_fb, A.mel_win);
+    auto tp2 = now();
+    auto tp3 = tp2, tp4 = tp2;
     const int frames = static_cast<int>(mel.size() / 80);
     std::vector<float> mel_pad((size_t)80 * SPK_N, 0.f);
     if (!ref_cached) {
@@ -280,6 +285,7 @@ int main(int argc, char** argv) {
         for (int m = 0; m < 80; ++m)
             std::memcpy(&mel_pad[(size_t)m * SPK_N], &mel[(size_t)m * frames], use_f * sizeof(float));
         if (!M.spk_body.set("logmel", mel_pad) || !M.spk_body.run()) return 6;
+        tp3 = now();
         std::vector<float> stats = M.spk_body.get("stats", SPK_STATS);
         std::vector<float> y(SPK_STATS);
         for (int i = 0; i < SPK_STATS; ++i)
@@ -294,19 +300,31 @@ int main(int argc, char** argv) {
         }
         norm = std::sqrt(norm) + 1e-12;
         for (auto& v : spk) v = static_cast<float>(v / norm);
-        if (!cache_file.empty()) {
-            std::string dir = ref_cache_dir;
-            for (size_t i = 0; i < dir.size(); ++i)
-                if (dir[i] == '/') { std::string sub = dir.substr(0, i); mkdir(sub.c_str(), 0755); }
-            mkdir(dir.c_str(), 0755);
-            if (FILE* cf = std::fopen(cache_file.c_str(), "wb")) {
-                std::fwrite(&n_lat, 4, 1, cf);
-                std::fwrite(latent.data(), 4, (size_t)n_lat * LATENT, cf);
-                std::fwrite(spk.data(), 4, 256, cf);
-                std::fclose(cf);
-            }
-        }
+        tp4 = now();
     }
+    // 参考特征落盘推迟到首个音频发出之后：NFS 写一次约 200 ms，不能压在 TTFT/TTFA 上
+    bool ref_cache_pending = !ref_cached && !cache_file.empty();
+    double t_cache_flush = 0.0;
+    auto flush_ref_cache = [&]() {
+        if (!ref_cache_pending) return;
+        ref_cache_pending = false;
+        auto tf0 = now();
+        std::string dir = ref_cache_dir;
+        for (size_t i = 0; i < dir.size(); ++i)
+            if (dir[i] == '/') { std::string sub = dir.substr(0, i); mkdir(sub.c_str(), 0755); }
+        mkdir(dir.c_str(), 0755);
+        if (FILE* cf = std::fopen(cache_file.c_str(), "wb")) {
+            std::fwrite(&n_lat, 4, 1, cf);
+            std::fwrite(latent.data(), 4, (size_t)n_lat * LATENT, cf);
+            std::fwrite(spk.data(), 4, 256, cf);
+            std::fclose(cf);
+        }
+        t_cache_flush = ms(tf0, now());
+    };
+    auto tp5 = now();
+    if (std::getenv("CUTETTS_PROFILE"))
+        std::fprintf(stderr, "    [host] resample %.0f ms  logmel %.0f ms  spk_npu %.0f ms  bn/lin %.0f ms\n",
+                     ms(tp0, tp1), ms(tp1, tp2), ms(tp2, tp3), ms(tp3, tp4));
     auto t2 = now();
 
     // ------------------------------------------------------------------- prompt
@@ -400,7 +418,7 @@ int main(int argc, char** argv) {
     std::mt19937 gen(static_cast<uint32_t>(seed));
     std::normal_distribution<float> nd(0.f, 1.f);
     std::vector<float> lat_all;              // VAE-space latents, LATENT floats each
-    double t_dit = 0, t_dec = 0, ttft = -1.0;
+    double t_dit = 0, t_dec = 0, ttft = -1.0, t_first_lat = -1.0;
     int pos = n, steps = 0, chunks = 0;
     cutetts::WavWriter writer;
     std::vector<float> streamed;             // non-streaming fallback buffer
@@ -444,7 +462,7 @@ int main(int argc, char** argv) {
             stream_states[i].swap(o);
         }
         ++chunks;
-        if (ttft < 0) ttft = ms(t_start, now());
+        if (ttft < 0) { ttft = ms(t_start, now()); flush_ref_cache(); }
         if (stream) {
             if (!writer.write(pcm.data(), pcm.size())) return false;
         } else {
@@ -458,7 +476,7 @@ int main(int argc, char** argv) {
         if (!decode_window(emitted_, upto, pcm)) return false;
         emitted_ = upto;
         ++chunks;
-        if (ttft < 0) ttft = ms(t_start, now());
+        if (ttft < 0) { ttft = ms(t_start, now()); flush_ref_cache(); }
         if (stream) {
             if (!writer.write(pcm.data(), pcm.size())) return false;
         } else {
@@ -492,6 +510,7 @@ int main(int argc, char** argv) {
             for (int j = 0; j < LATENT; ++j) lat[j] = x[(size_t)c * LATENT + j] / A.scale - A.bias;
             lat_all.insert(lat_all.end(), lat.begin(), lat.end());
         }
+        if (t_first_lat < 0) t_first_lat = ms(t_start, now());
         ++steps;
 
         if (stream && has_stream_dec) {
@@ -572,19 +591,25 @@ int main(int argc, char** argv) {
         wav_out.resize((size_t)total_lat * HOP);
         if (!cutetts::write_wav(out_path, wav_out, SR)) return 15;
     }
+    flush_ref_cache();
     const size_t samples = (size_t)total_lat * HOP;
     auto t6 = now();
 
     const double total_ms = ms(t_start, t6);
     const double dur = double(samples) / SR;
-    std::printf("%s: audio %.2fs, TTFT %.2fs, total %.2fs, RTF %.3f, %d patches, %d chunks\n",
-                stream ? "streaming" : "offline", dur, (ttft < 0 ? total_ms : ttft) / 1000.0,
+    std::printf("%s: audio %.2fs, TTFT %.2fs (first latent), TTFA %.2fs (first audio), "
+                "total %.2fs, RTF %.3f, %d patches, %d chunks\n",
+                stream ? "streaming" : "offline", dur,
+                (t_first_lat < 0 ? total_ms : t_first_lat) / 1000.0,
+                (ttft < 0 ? total_ms : ttft) / 1000.0,
                 total_ms / 1000.0, total_ms / 1000.0 / dur, steps, chunks);
     std::printf("  ref %s  vae_enc %.0f ms  speaker %.0f ms  prompt %.0f ms  prefill %.0f ms  "
                 "ar %.0f ms (dit %.0f, lm_dec %.0f)  vae_dec %.0f ms\n",
                 ref_cached ? "cached" : "encoded",
                 ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t4, t5), t_dit, t_dec,
                 ms(t5, t6));
+    if (std::getenv("CUTETTS_PROFILE") && t_cache_flush > 0)
+        std::fprintf(stderr, "    [host] ref cache write (after first packet) %.0f ms\n", t_cache_flush);
     std::printf("saved %s\n", out_path.c_str());
     return 0;
 }

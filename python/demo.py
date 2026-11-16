@@ -50,7 +50,9 @@ def main():
                 pcm = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype("<i2")
                 wf.writeframes(pcm.tobytes())
         tm = tts.last_timing
-        print(f"streaming: {tm['chunks']} chunks, TTFT {tm['ttft']:.2f}s, "
+        print(f"streaming: {tm['chunks']} chunks, "
+              f"TTFT {tm.get('ttft_latent', tm['ttft']):.2f}s (first latent), "
+              f"TTFA {tm.get('ttfa', tm['ttft']):.2f}s (first audio), "
               f"audio {tm['audio_seconds']:.2f}s in {tm['total']:.2f}s "
               f"(RTF {tm['total']/max(tm['audio_seconds'],1e-6):.3f})")
         print("saved", a.output)

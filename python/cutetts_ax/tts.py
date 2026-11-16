@@ -516,6 +516,7 @@ class CuteTTSAX:
         pos = plen
         n_steps = 0
         ttft = None
+        ttft_latent = None
         n_chunks = 0
         t_dit = t_dec = 0.0
 
@@ -559,6 +560,8 @@ class CuteTTSAX:
             n_steps += 1
             for c in range(2):
                 vae_lat.append((x[0, c] / self.scale - self.bias).astype(np.float32))
+            if ttft_latent is None:
+                ttft_latent = time.time() - t0
 
             if states is not None:
                 yield emit_patch(x)
@@ -597,8 +600,11 @@ class CuteTTSAX:
         if states is None and emitted < len(vae_lat):
             yield emit(len(vae_lat))
 
+        ttfa = ttft or (time.time() - t0)
         self.last_timing = {
-            "ttft": ttft or (time.time() - t0), "total": time.time() - t0,
+            # TTFT = 首个 latent 产出；TTFA = 首个音频包产出（"ttft" 保留为 TTFA 别名）
+            "ttft_latent": ttft_latent or ttfa, "ttfa": ttfa, "ttft": ttfa,
+            "total": time.time() - t0,
             "audio_seconds": len(vae_lat) / 12.5, "steps": n_steps,
             "chunks": n_chunks, "dit": t_dit, "lm_decode": t_dec,
             "streaming": True, "streaming_mode": ("stateful" if states is not None else f"window{win_len}"),
