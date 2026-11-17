@@ -140,6 +140,8 @@ public:
         return run();
     }
 
+    bool loaded() const { return handle_ != nullptr; }
+
     bool run() {
         if (AX_ENGINE_RunSyncV2(handle_, context_, io_) != 0) return false;
         for (AX_U32 i = 0; i < info_->nOutputSize; ++i) {

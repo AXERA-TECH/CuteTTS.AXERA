@@ -1,10 +1,15 @@
 # CuteTTS.AXERA
 
-**CuteTTS（0.2B 连续隐变量自回归 TTS）在 AX650 上的全 NPU 部署：zero-shot 音色克隆，24 kHz 输出。**
+**0.2B · 实时流式 · zero-shot 音色克隆 · 24 kHz**
 
-支持流式合成（1.28 s 一包）与非流式整句合成：首音频 **TTFA 0.48 s**、首 latent TTFT 0.17 s（参考音色缓存命中），C++ RTF 0.35–0.63，Python RTF 0.40–0.59。
+![RTF](https://img.shields.io/badge/RTF-0.47--0.63-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
-![RTF](https://img.shields.io/badge/RTF-0.35--0.63%20cpp-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![Size](https://img.shields.io/badge/axmodel-688%20MB-green) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
+| 项目 | 说明 |
+|---|---|
+| **支持语言** | **中文、英文**（已上板验证）· 法语 / 德语 / 西班牙语（未验证） |
+| **推理方式** | C++ / Python，9 个 axmodel 全 NPU，流式（1.28 s 一包）+ 非流式 |
+| **首包时延** | TTFA **0.48 s**、首 latent TTFT 0.17 s（参考音色缓存命中） |
+| **实时率** | RTF **0.47–0.63**（C++，3–10 s 句）· 0.40–0.59（Python） |
 
 - HuggingFace（预编译模型 + SDK）: https://huggingface.co/HY-2012/CuteTTS.AXERA
 - GitHub（源码 + 转换脚本 + C++）: https://github.com/ZY-2012/CuteTTS.AXERA

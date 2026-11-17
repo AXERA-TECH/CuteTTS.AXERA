@@ -161,9 +161,7 @@ int main(int argc, char** argv) {
     auto mpath = [&](const char* n) { return model_dir + "/" + n + ".axmodel"; };
     if (!M.vae_enc.load(mpath("vae_enc")) || !M.spk_body.load(mpath("spk_body")) ||
         !M.loc.load(mpath("locenc_step")) || !M.prefill.load(mpath("lm_prefill")) ||
-        !M.dec.load(mpath("lm_decode")) || !M.dit.load(mpath("dit_step")) ||
-        !M.dec128.load(mpath("vae_dec_l128")) ||
-        !M.dec256.load(mpath("vae_dec_l256"))) {
+        !M.dec.load(mpath("lm_decode")) || !M.dit.load(mpath("dit_step"))) {
         std::fprintf(stderr, "failed to load axmodels from %s\n", model_dir.c_str());
         return 3;
     }
@@ -201,8 +199,7 @@ int main(int argc, char** argv) {
 
     // warm up every graph so the first request does not pay NPU lazy-init cost
     {
-        cutetts::AxModel* warm[] = {&M.vae_enc, &M.spk_body, &M.loc, &M.prefill, &M.dec, &M.dit,
-                                    &M.dec128, &M.dec256};
+        cutetts::AxModel* warm[] = {&M.vae_enc, &M.spk_body, &M.loc, &M.prefill, &M.dec, &M.dit};
         for (auto* m : warm) m->warmup();
         if (win_len == 80) dec_win.warmup();
         if (has_stream_dec) dec_stream.warmup();
@@ -604,6 +601,11 @@ int main(int argc, char** argv) {
         for (int i = 0; i < total_lat; ++i)
             for (int c = 0; c < LATENT; ++c)
                 vae_lat[(size_t)c * bucket + i] = lat_all[(size_t)i * LATENT + c];
+        // l128/l256 按需加载：流式与 ≤6.4 s 离线只用 l80，常驻内存少 ~120 MB
+        if (bucket == 128 && !M.dec128.loaded() && !M.dec128.load(mpath("vae_dec_l128")))
+            return 14;
+        if (bucket == 256 && !M.dec256.loaded() && !M.dec256.load(mpath("vae_dec_l256")))
+            return 14;
         cutetts::AxModel& dec = (bucket == win_len) ? dec_win
                                : (bucket == 128 ? M.dec128 : M.dec256);
         if (!dec.set("latent", vae_lat) || !dec.run()) return 14;
