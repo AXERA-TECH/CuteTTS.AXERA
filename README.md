@@ -1,8 +1,8 @@
 # CuteTTS.AXERA
 
-**0.2B · 实时流式 · zero-shot 音色克隆 · 24 kHz**
+**0.2B · 实时流式 · 支持中英 · zero-shot 音色克隆 · 24 kHz**
 
-![RTF](https://img.shields.io/badge/RTF-0.47--0.63-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
+![RTF](https://img.shields.io/badge/RTF-0.47--0.63-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![语言](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87%20%2F%20%E8%8B%B1%E6%96%87-blueviolet) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
 | 项目 | 说明 |
 |---|---|
