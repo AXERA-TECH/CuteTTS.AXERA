@@ -12,7 +12,7 @@
 | **实时率** | RTF **0.47–0.63**（C++，3–10 s 句）· 0.40–0.59（Python） |
 
 - HuggingFace（预编译模型 + SDK）: https://huggingface.co/HY-2012/CuteTTS.AXERA
-- GitHub（源码 + 转换脚本 + C++）: https://github.com/ZY-2012/CuteTTS.AXERA
+- GitHub（源码 + 转换脚本 + C++）: https://github.com/AXERA-TECH/CuteTTS.AXERA
 - 原始模型: https://huggingface.co/OPPOer/CuteTTS-distill
 
 ## 目录
