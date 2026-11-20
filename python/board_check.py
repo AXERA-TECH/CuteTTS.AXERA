@@ -15,7 +15,7 @@ from cutetts_ax.tts import AxEngine  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EV = os.path.join(ROOT, "export", "eval_io")
-MODELS = os.path.join(ROOT, "compile")
+MODELS = os.environ.get("CUTETTS_MODELS", os.path.join(ROOT, "compile"))
 if not os.path.isdir(MODELS):
     MODELS = os.path.join(ROOT, "models")
 ROWS = []

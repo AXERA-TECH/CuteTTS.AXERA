@@ -2,6 +2,9 @@
 
 **0.2B · 实时流式 · 支持中英 · zero-shot 音色克隆 · 24 kHz**
 
+> **本分支（`npu2`）的 9 个 axmodel 按 `npu_mode = NPU2` 编译**（`main` 为 VAE 3 核 / LM·DiT 1 核的混合配置）。
+> 音频与 `main` 逐样本一致（md5 相同），速度差异见 [docs/npu2.md](docs/npu2.md)。
+
 ![RTF](https://img.shields.io/badge/RTF-0.47--0.63-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![语言](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87%20%2F%20%E8%8B%B1%E6%96%87-blueviolet) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
 | 项目 | 说明 |
@@ -85,10 +88,10 @@ print(tts.last_timing)
 
 | 模式 | 实现 | 音频 | TTFT（首 latent） | TTFA（首音频） | 总耗时 | RTF（耗时/音频） | 出包间隔 |
 |---|---|---|---|---|---|---|---|
-| 流式 | C++ | 3.04 s | 0.15–0.21 s（首次 0.57 s） | 0.47–0.52 s（首次 0.89 s） | 1.84–1.89 s | 0.61–0.62 | 1.28 s |
-| 流式 | Python | 2.88 s | 0.14–0.15 s（首次 0.86 s） | 0.47–0.49 s（首次 1.20 s） | 1.69–1.71 s | 0.59 | 1.28 s |
-| 非流式 | C++ | 3.04 s | 1.06–1.15 s | 1.06–1.15 s | 1.06–1.15 s | 0.35–0.38 | — |
-| 非流式 | Python | 2.88 s | 1.16–1.17 s | 1.16–1.17 s | 1.16–1.17 s | 0.40–0.41 | — |
+| 流式 | C++ | 3.04 s | 0.12–0.13 s | 0.48–0.49 s | 1.95 s | 0.64 | 1.28 s |
+| 流式 | Python | 2.88 s | 0.24–0.27 s | 0.62–0.65 s | 1.84–1.88 s | 0.64–0.65 | 1.28 s |
+| 非流式 | C++ | 3.04 s | 1.00–1.01 s | 1.00–1.01 s | 1.00–1.01 s | 0.33 | — |
+| 非流式 | Python | 2.88 s | 1.09–1.10 s | 1.09–1.10 s | 1.09–1.10 s | 0.38 | — |
 
 <a id="tree"></a>
 
