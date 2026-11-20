@@ -5,7 +5,7 @@
 > **本分支（`npu2`）的 9 个 axmodel 按 `npu_mode = NPU2` 编译**（`main` 为 VAE 3 核 / LM·DiT 1 核的混合配置）。
 > 音频与 `main` 逐样本一致（md5 相同），速度差异见 [docs/npu2.md](docs/npu2.md)。
 
-![RTF](https://img.shields.io/badge/RTF-0.47--0.63-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.17%20s-lightgrey) ![语言](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87%20%2F%20%E8%8B%B1%E6%96%87-blueviolet) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
+![RTF](https://img.shields.io/badge/RTF-0.33--0.65-brightgreen) ![TTFA](https://img.shields.io/badge/TTFA-0.48%20s-blue) ![TTFT](https://img.shields.io/badge/TTFT-0.12%20s-lightgrey) ![语言](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87%20%2F%20%E8%8B%B1%E6%96%87-blueviolet) ![SampleRate](https://img.shields.io/badge/audio-24%20kHz-blue)
 
 | 项目 | 说明 |
 |---|---|
