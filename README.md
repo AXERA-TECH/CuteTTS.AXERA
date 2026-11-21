@@ -14,7 +14,7 @@
 | **首包时延** | TTFA **0.48 s**、首 latent TTFT 0.17 s（参考音色缓存命中） |
 | **实时率** | RTF **0.47–0.63**（C++，3–10 s 句）· 0.40–0.59（Python） |
 
-- HuggingFace（预编译模型 + SDK）: https://huggingface.co/HY-2012/CuteTTS.AXERA
+- HuggingFace（预编译模型 + SDK）: https://huggingface.co/AXERA-TECH/CuteTTS.AXERA
 - GitHub（源码 + 转换脚本 + C++）: https://github.com/AXERA-TECH/CuteTTS.AXERA
 - 原始模型: https://huggingface.co/OPPOer/CuteTTS-distill
 
